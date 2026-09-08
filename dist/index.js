@@ -105856,7 +105856,7 @@ async function run() {
         let lastSeenEventDate;
         if (waitForDeployment) {
             core.startGroup('⏳ Waiting for deployment');
-            lastSeenEventDate = await (0, monitoring_1.waitForDeploymentCompletion)(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime);
+            lastSeenEventDate = await (0, monitoring_1.waitForDeploymentCompletion)(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime, applicationVersionLabel);
             core.endGroup();
         }
         if (waitForEnvironmentRecovery) {
@@ -106008,12 +106008,17 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
  * Wait for deployment to complete
  * Returns the last seen event date to avoid duplicate events in subsequent monitoring
  */
-async function waitForDeploymentCompletion(clients, applicationName, environmentName, timeout, deploymentActionType, deploymentStartTime) {
+async function waitForDeploymentCompletion(clients, applicationName, environmentName, timeout, deploymentActionType, deploymentStartTime, expectedVersionLabel) {
     core.info('⏳ Waiting for deployment to complete...');
     const startTime = Date.now();
     const maxWait = timeout * 1000;
     let previousStatus;
     let lastSeenEventDate;
+    // 'Ready' on another version is ambiguous: either the environment has not acted on the
+    // request yet, or the update was rolled back. Only the state surviving this window is
+    // treated as a rollback.
+    const rollbackConfirmationMs = 30000;
+    let readyOnUnexpectedVersionSince;
     // Poll every 20 seconds for create, 10 seconds for update
     const pollInterval = deploymentActionType === 'create' ? 20000 : 10000;
     while (Date.now() - startTime < maxWait) {
@@ -106025,11 +106030,27 @@ async function waitForDeploymentCompletion(clients, applicationName, environment
         if (response.Environments && response.Environments.length > 0) {
             const env = response.Environments[0];
             const status = env.Status;
-            if (status === 'Ready') {
+            const versionMismatch = expectedVersionLabel !== undefined && env.VersionLabel !== expectedVersionLabel;
+            if (status === 'Ready' && !versionMismatch) {
                 // Fetch and display final events before completing
                 const finalEvents = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+                if (finalEvents.hasError) {
+                    throw new Error(`Environment deployment failed - fatal or error event detected: ${finalEvents.errorMessage}`);
+                }
                 core.info('✅ Deployment complete');
                 return finalEvents.lastEventDate || lastSeenEventDate;
+            }
+            if (status === 'Ready' && versionMismatch) {
+                readyOnUnexpectedVersionSince ??= Date.now();
+                if (Date.now() - readyOnUnexpectedVersionSince >= rollbackConfirmationMs) {
+                    // Fetch and display final events before failing
+                    await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+                    throw new Error(`Environment deployment failed - environment is running version ${env.VersionLabel ?? 'unknown'} ` +
+                        `instead of the requested ${expectedVersionLabel}, the update was most likely rolled back`);
+                }
+            }
+            else {
+                readyOnUnexpectedVersionSince = undefined;
             }
             // Check for fatal/error events during deployment
             const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
