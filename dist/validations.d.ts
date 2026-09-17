@@ -21,8 +21,10 @@ export interface Inputs {
     excludePatterns: string;
     symlinks: 'preserve' | 'follow';
     optionSettings?: string;
+    imageUri?: string;
+    buildConfiguration?: string;
 }
 export declare function validateAllInputs(): {
     valid: boolean;
 } & Partial<Inputs>;
-export declare function parseJsonInput(jsonString: string, inputName: string): any;
+export declare function parseJsonInput<T = unknown>(jsonString: string, inputName: string): T;
