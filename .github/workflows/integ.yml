@@ -21,7 +21,10 @@ jobs:
   integ-test:
     name: Integration Test
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Budget: build (~2m) + create (<=20m) + update (<=20m) + cleanup (<=10m). The deploy steps
+    # carry their own timeout-minutes so a stuck deploy fails the step (and cleanup still runs
+    # via always()) instead of the whole job being cancelled, which would skip cleanup.
+    timeout-minutes: 60
     environment: integ-test
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target'
 
@@ -80,6 +83,7 @@ jobs:
 
       - name: Deploy - Create Environment
         id: deploy-create
+        timeout-minutes: 20
         uses: ./ # Points to the action in the current repository
         with:
           aws-region: ${{ env.AWS_REGION }}
@@ -116,6 +120,7 @@ jobs:
 
       - name: Deploy - Update Environment
         id: deploy-update
+        timeout-minutes: 20
         uses: ./
         with:
           aws-region: ${{ env.AWS_REGION }}

@@ -36,7 +36,7 @@ export function sanitizeResourceIdentifiers(message: string): string {
     .replace(/\barn:aws[a-z-]*:[a-zA-Z0-9_/:.+*@-]+\b/g, '***')
     // Container image references: 123456789012.dkr.ecr.us-east-1.amazonaws.com/app:tag or @sha256:...
     // (stops before whitespace, quotes, and closing punctuation so surrounding prose survives)
-    .replace(/\b\d{12}\.dkr\.ecr(-fips)?\.[a-z0-9-]+\.amazonaws\.com(\.cn)?\/(?:[^\s"'()[\]{},;.]|\.(?=[^\s"'()[\]{},;.]))+/g, '***')
+    .replace(/\b\d{12}\.dkr\.ecr(-fips)?\.[a-z0-9-]+\.amazonaws\.com(\.cn)?\/(?:[^\s"'()[\]{}<>,;.!?]|\.(?=[^\s"'()[\]{}<>,;.!?]))+/g, '***')
     // IPv4 addresses (octets 0-255, so dotted version strings like 1.2.3.400 are left alone)
     .replace(/\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g, '***');
 }
@@ -207,8 +207,13 @@ export async function waitForDeploymentCompletion(
     await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
 
-  // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
+  // Timeout occurred - fetch events to help diagnose. An ERROR/FATAL event surfacing on this final
+  // check is the real cause, so report it rather than a generic timeout (with verbose logging off
+  // the event lines themselves are not printed, so the message is the only place it would show).
+  const finalCheck = await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
+  if (finalCheck.hasError) {
+    throw new Error(`Deployment timed out after ${timeout}s - fatal or error event detected: ${finalCheck.errorMessage}`);
+  }
   throw new Error(`Deployment timed out after ${timeout}s`);
 }
 
@@ -269,8 +274,11 @@ export async function waitForHealthRecovery(
     await new Promise(resolve => setTimeout(resolve, 15000));
   }
 
-  // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
+  // Timeout occurred - fetch events to help diagnose (see waitForDeploymentCompletion).
+  const finalCheck = await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
+  if (finalCheck.hasError) {
+    throw new Error(`Environment health recovery timed out after ${timeout}s - fatal or error event detected: ${finalCheck.errorMessage}`);
+  }
   throw new Error(`Environment health recovery timed out after ${timeout}s`);
 }
 

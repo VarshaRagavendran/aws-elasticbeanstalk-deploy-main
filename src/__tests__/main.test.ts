@@ -601,6 +601,20 @@ describe('Main Functions', () => {
     });
   });
 
+  describe('waitForDeploymentCompletion timeout diagnostics', () => {
+    it('should report an ERROR event found on the final check instead of a bare timeout', async () => {
+      const deploymentStartTime = new Date(0);
+      // Poll: env Updating, no events; then the deadline passes and the final check finds an ERROR
+      mockSend
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Updating' }] })
+        .mockResolvedValueOnce({ Events: [] })
+        .mockResolvedValueOnce({ Events: [{ EventDate: new Date(60000), Severity: 'ERROR', Message: 'Failed to deploy application.' }] });
+
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 1, false, 'update', deploymentStartTime))
+        .rejects.toThrow('Deployment timed out after 1s - fatal or error event detected: Failed to deploy application.');
+    });
+  });
+
   describe('waitForEnvironmentReady', () => {
     it('should keep polling after a transient DescribeEnvironments failure', async () => {
       jest.useFakeTimers();
@@ -755,6 +769,8 @@ describe('Main Functions', () => {
         .toBe('Image (***), retrying');
       expect(sanitizeResourceIdentifiers('Pulled 123456789012.dkr.ecr.us-east-1.amazonaws.com/app@sha256:abc.'))
         .toBe('Pulled ***.');
+      expect(sanitizeResourceIdentifiers('Image <123456789012.dkr.ecr.us-east-1.amazonaws.com/app:v1> not found!'))
+        .toBe('Image <***> not found!');
     });
   });
 
