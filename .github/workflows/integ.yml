@@ -186,6 +186,9 @@ jobs:
           deployment-package-path: test-app.zip
           wait-for-deployment: 'false'
           wait-for-environment-recovery: 'false'
+          # The create step above runs with the default (masked) logging; this one runs
+          # unmasked so a single run shows both behaviours of the verbose-logging toggle.
+          verbose-logging: 'true'
 
       - name: Wait for Update
         shell: bash
