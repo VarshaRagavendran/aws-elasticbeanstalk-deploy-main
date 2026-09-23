@@ -62,7 +62,12 @@ export async function run(): Promise<void> {
     // normally below; the runner masks them in log output only.
     maskUnlessVerbose(verboseLogging, applicationName);
     maskUnlessVerbose(verboseLogging, environmentName);
-    maskUnlessVerbose(verboseLogging, applicationVersionLabel);
+    // A version label equal to the commit SHA (the default when version-label is unset) is not
+    // masked: runner masks are job-wide, and hiding the SHA would blank checkout summaries,
+    // `github.sha` in later scripts, and deploy annotations for the rest of the job.
+    if (applicationVersionLabel !== process.env.GITHUB_SHA) {
+      maskUnlessVerbose(verboseLogging, applicationVersionLabel);
+    }
     maskUnlessVerbose(verboseLogging, s3BucketName);
     maskUnlessVerbose(verboseLogging, cnamePrefix);
     maskUnlessVerbose(verboseLogging, imageUri);

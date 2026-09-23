@@ -7,6 +7,11 @@ import { describeEnvironment, describeEvents, EventSnapshot, isNonRetryableError
  * Used to sanitize error messages when verbose logging is disabled. Identifiers the action
  * knows up front (application/environment names, account ID, version label, ...) are masked by
  * core.setSecret instead; this covers the ones only the service knows (resources it created).
+ *
+ * Scope is intentional: this only runs on error/warning messages, so it targets the identifiers
+ * Elastic Beanstalk actually embeds there. Bare 12-digit account IDs are left alone (too
+ * false-positive-prone; the account ID is masked via setSecret), and rarer VPC resource IDs
+ * (rtb-, igw-, eipassoc-, pcx-) and IPv6 are not covered.
  */
 export function sanitizeResourceIdentifiers(message: string): string {
   return message
@@ -122,7 +127,7 @@ async function describeRecentEvents(
     return { hasError: false, lastEventDate: mostRecentDate };
   } catch (error) {
     // If we can't fetch events, just log and continue
-    core.debug(`Failed to fetch events: ${error}`);
+    core.debug(`Failed to fetch events: ${describeErrorMessage(error, verboseLogging)}`);
     return { hasError: false, lastEventDate: lastSeenEventDate };
   }
 }
@@ -295,7 +300,7 @@ export async function waitForEnvironmentReady(
   applicationName: string,
   environmentName: string,
   timeout: number,
-  verboseLogging = true
+  verboseLogging: boolean
 ): Promise<void> {
   const startTime = Date.now();
   const maxWait = timeout * 1000;

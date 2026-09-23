@@ -623,7 +623,7 @@ describe('Main Functions', () => {
           .mockRejectedValueOnce(new Error('Rate exceeded')) // transient
           .mockResolvedValueOnce({ Environments: [{ Status: 'Ready' }] });
 
-        const wait = waitForEnvironmentReady(mockClients, 'app', 'env', 900);
+        const wait = waitForEnvironmentReady(mockClients, 'app', 'env', 900, true);
         await jest.advanceTimersByTimeAsync(10000);
         await expect(wait).resolves.toBeUndefined();
         expect(mockedCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not read environment status (will retry): Rate exceeded'));
@@ -637,13 +637,13 @@ describe('Main Functions', () => {
       denied.name = 'AccessDeniedException';
       mockSend.mockRejectedValueOnce(denied);
 
-      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900)).rejects.toThrow('not authorized');
+      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900, true)).rejects.toThrow('not authorized');
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
 
     it('should return without waiting when the environment is already Ready', async () => {
       mockSend.mockResolvedValueOnce({ Environments: [{ Status: 'Ready' }] });
-      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900)).resolves.toBeUndefined();
+      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900, true)).resolves.toBeUndefined();
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
   });
@@ -962,6 +962,37 @@ describe('Main Functions', () => {
       expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-url', 'test.com');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-id', 'e-123');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    it('should not mask the version label when it defaults to the commit SHA', async () => {
+      const sha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+      const prevSha = process.env.GITHUB_SHA;
+      process.env.GITHUB_SHA = sha;
+      try {
+        mockedCore.getInput.mockImplementation((name: string) => {
+          const inputs: Record<string, string> = {
+            'aws-region': 'us-east-1',
+            'application-name': 'test-app',
+            'environment-name': 'test-env',
+            'solution-stack-name': '64bit Amazon Linux 2',
+            'deployment-timeout': '900',
+            'max-retries': '3',
+            'retry-delay': '1',
+          };
+          return inputs[name] || '';
+        });
+        mockedCore.getBooleanInput.mockImplementation((name: string) => name === 'create-s3-bucket-if-not-exists');
+        mockStandardUpdateFlow();
+
+        await run();
+
+        expect(mockedCore.setFailed).not.toHaveBeenCalled();
+        expect(mockedCore.setSecret).toHaveBeenCalledWith('test-app');
+        expect(mockedCore.setSecret).not.toHaveBeenCalledWith(sha);
+        expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', sha);
+      } finally {
+        if (prevSha === undefined) delete process.env.GITHUB_SHA; else process.env.GITHUB_SHA = prevSha;
+      }
     });
 
     it('should not mask identifiers when verbose-logging is true', async () => {

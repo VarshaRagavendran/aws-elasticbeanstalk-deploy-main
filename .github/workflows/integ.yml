@@ -43,6 +43,18 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      # The action masks identifiers it handles (see verbose-logging), but the role ID can surface
+      # in credential/CLI errors from steps that run before the action does, so mask it up front.
+      # The account ID is masked by configure-aws-credentials (mask-aws-account-id).
+      - name: Mask role ID
+        shell: bash
+        env:
+          M_ROLE: ${{ secrets.AWS_ROLE_ID }}
+        run: |
+          set +x
+          echo "::add-mask::$M_ROLE"
+          set -x
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
