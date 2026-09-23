@@ -30,25 +30,15 @@ jobs:
       # Unique naming per run ensures PRs don't collide
       APP_NAME: eb-test-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}
       ENV_NAME: it-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}
+      # Passed to both deploy steps. The workflow adds no masks of its own, so flipping this
+      # to 'false' is what makes identifiers appear as *** in the action's log output.
+      VERBOSE_LOGGING: 'true'
 
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Pre-emptive Masking
-        shell: bash
-        env:
-          M_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          M_ROLE: ${{ secrets.AWS_ROLE_ID }}
-        run: |
-          set +x # Disable command echoing
-          # Register masks
-          echo "::add-mask::$M_ACCOUNT"
-          echo "::add-mask::$M_ROLE"
-          echo "::add-mask::Authenticated as assumedRoleId"
-          set -x
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -102,6 +92,7 @@ jobs:
           create-application-if-not-exists: 'true'
           wait-for-deployment: 'false'
           wait-for-environment-recovery: 'false'
+          verbose-logging: ${{ env.VERBOSE_LOGGING }}
           option-settings: |
             [
               {"Namespace": "aws:autoscaling:launchconfiguration", "OptionName": "IamInstanceProfile", "Value": "aws-elasticbeanstalk-ec2-role"},
@@ -145,34 +136,21 @@ jobs:
           done
           set -x
 
-      - name: Verify and Mask Create Outputs
+      - name: Verify Create Outputs
         shell: bash
         env:
-          ENV_URL: ${{ steps.deploy-create.outputs.environment-url }}
           ENV_ID: ${{ steps.deploy-create.outputs.environment-id }}
           ACTION_TYPE: ${{ steps.deploy-create.outputs.deployment-action-type }}
         run: |
           set +x
-          echo "::add-mask::$ENV_URL"
-          echo "::add-mask::$ENV_ID"
-
+          if [ -z "$ENV_ID" ]; then
+            echo "::error::environment-id output is empty"
+            exit 1
+          fi
           if [ "$ACTION_TYPE" != "create" ]; then
             echo "::error::Expected create, got $ACTION_TYPE"
             exit 1
           fi
-          set -x
-
-      - name: Pre-mask Update Details
-        shell: bash
-        run: |
-          set +x
-          URL=$(aws elasticbeanstalk describe-environments \
-            --environment-names "${{ env.ENV_NAME }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --query "Environments[0].CNAME" --output text)
-          
-          echo "::add-mask::$URL"
-          echo "::add-mask::update-${{ github.run_id }}"
           set -x
 
       - name: Deploy - Update Environment
@@ -186,9 +164,7 @@ jobs:
           deployment-package-path: test-app.zip
           wait-for-deployment: 'false'
           wait-for-environment-recovery: 'false'
-          # The create step above runs with the default (masked) logging; this one runs
-          # unmasked so a single run shows both behaviours of the verbose-logging toggle.
-          verbose-logging: 'true'
+          verbose-logging: ${{ env.VERBOSE_LOGGING }}
 
       - name: Wait for Update
         shell: bash
@@ -227,7 +203,7 @@ jobs:
           done
           set -x
 
-      - name: Verify and Mask Update Outputs
+      - name: Verify Update Outputs
         shell: bash
         env:
           ENV_URL: ${{ steps.deploy-update.outputs.environment-url }}
@@ -235,9 +211,10 @@ jobs:
           ACTION_TYPE: ${{ steps.deploy-update.outputs.deployment-action-type }}
         run: |
           set +x
-          echo "::add-mask::$ENV_URL"
-          echo "::add-mask::$ENV_ID"
-
+          if [ -z "$ENV_URL" ] || [ -z "$ENV_ID" ]; then
+            echo "::error::environment-url or environment-id output is empty"
+            exit 1
+          fi
           if [ "$ACTION_TYPE" != "update" ]; then
             echo "::error::Expected update, got $ACTION_TYPE"
             exit 1

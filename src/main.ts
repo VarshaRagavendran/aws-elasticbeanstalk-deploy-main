@@ -37,8 +37,8 @@ function maskUnlessVerbose(verboseLogging: boolean, value: string | undefined): 
 export async function run(): Promise<void> {
   const startTime = Date.now();
   // Hoisted so the catch block can sanitize error messages.
-  // Defaults to false (quiet) if an error is thrown before inputs are parsed.
-  let verboseLogging = false;
+  // Matches the action.yml default (true) if an error is thrown before inputs are parsed.
+  let verboseLogging = true;
 
   try {
     core.info('🚀 Starting Elastic Beanstalk deployment...');
