@@ -32,7 +32,7 @@ jobs:
       ENV_NAME: it-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}
       # Passed to both deploy steps. The workflow adds no masks of its own, so flipping this
       # to 'false' is what makes identifiers appear as *** in the action's log output.
-      VERBOSE_LOGGING: 'true'
+      VERBOSE_LOGGING: 'false'
 
     steps:
       - name: Checkout PR branch
