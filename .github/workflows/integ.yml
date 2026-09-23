@@ -90,51 +90,12 @@ jobs:
           platform-arn: ${{ steps.platform.outputs.name }}
           create-environment-if-not-exists: 'true'
           create-application-if-not-exists: 'true'
-          wait-for-deployment: 'false'
-          wait-for-environment-recovery: 'false'
           verbose-logging: ${{ env.VERBOSE_LOGGING }}
           option-settings: |
             [
               {"Namespace": "aws:autoscaling:launchconfiguration", "OptionName": "IamInstanceProfile", "Value": "aws-elasticbeanstalk-ec2-role"},
               {"Namespace": "aws:elasticbeanstalk:environment", "OptionName": "ServiceRole", "Value": "aws-elasticbeanstalk-service-role"}
             ]
-
-      - name: Wait for Create
-        shell: bash
-        run: |
-          set +x
-          echo "⏳ Waiting for environment launch (10m timeout)..."
-
-          TIMEOUT_SECONDS=600
-          START_TIME=$(date +%s)
-          END_TIME=$((START_TIME + TIMEOUT_SECONDS))
-
-          while true; do
-            if [ "$(date +%s)" -gt "$END_TIME" ]; then
-              echo "::error::Create timed out after 10 minutes."
-              exit 1
-            fi
-
-            ENV_INFO=$(aws elasticbeanstalk describe-environments --environment-names "${{ env.ENV_NAME }}" --region "${{ env.AWS_REGION }}" --query "Environments[0].[Status,Health]" --output text)
-            STATUS=$(echo "$ENV_INFO" | awk '{print $1}')
-            HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
-
-            if [ "$STATUS" == "Ready" ]; then
-              if [[ "$HEALTH" == "Green" || "$HEALTH" == "Ok" || "$HEALTH" == "Yellow" ]]; then
-                echo "✅ Create Ready (Health: $HEALTH)"
-                break
-              elif [ "$HEALTH" == "Red" ]; then
-                echo "::error::Create Ready but Health is Red."
-                exit 1
-              fi
-              echo "...Ready but Health is $HEALTH. Waiting for healthy status..."
-              sleep 15
-              continue
-            fi
-            echo "...status is $STATUS ($HEALTH). Checking again in 15s..."
-            sleep 15
-          done
-          set -x
 
       - name: Verify Create Outputs
         shell: bash
@@ -162,46 +123,7 @@ jobs:
           environment-name: ${{ env.ENV_NAME }}
           version-label: update-${{ github.run_id }}
           deployment-package-path: test-app.zip
-          wait-for-deployment: 'false'
-          wait-for-environment-recovery: 'false'
           verbose-logging: ${{ env.VERBOSE_LOGGING }}
-
-      - name: Wait for Update
-        shell: bash
-        run: |
-          set +x
-          echo "⏳ Waiting for environment update (10m timeout)..."
-
-          TIMEOUT_SECONDS=600
-          START_TIME=$(date +%s)
-          END_TIME=$((START_TIME + TIMEOUT_SECONDS))
-
-          while true; do
-            if [ "$(date +%s)" -gt "$END_TIME" ]; then
-              echo "::error::Update timed out after 10 minutes."
-              exit 1
-            fi
-
-            ENV_INFO=$(aws elasticbeanstalk describe-environments --environment-names "${{ env.ENV_NAME }}" --region "${{ env.AWS_REGION }}" --query "Environments[0].[Status,Health]" --output text)
-            STATUS=$(echo "$ENV_INFO" | awk '{print $1}')
-            HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
-
-            if [ "$STATUS" == "Ready" ]; then
-              if [[ "$HEALTH" == "Green" || "$HEALTH" == "Ok" || "$HEALTH" == "Yellow" ]]; then
-                echo "✅ Update Ready (Health: $HEALTH)"
-                break
-              elif [ "$HEALTH" == "Red" ]; then
-                echo "::error::Update Ready but Health is Red."
-                exit 1
-              fi
-              echo "...Ready but Health is $HEALTH. Waiting for healthy status..."
-              sleep 15
-              continue
-            fi
-            echo "...updating: $STATUS ($HEALTH). Checking again in 15s..."
-            sleep 15
-          done
-          set -x
 
       - name: Verify Update Outputs
         shell: bash
