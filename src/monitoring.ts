@@ -3,12 +3,63 @@ import { AWSClients } from './aws-clients';
 import { describeEnvironment, describeEvents, EventSnapshot, isNonRetryableError } from './aws-operations';
 
 /**
+ * Strip dynamic AWS resource identifiers from a message.
+ * Used to sanitize error messages when verbose logging is disabled. Identifiers the action
+ * knows up front (application/environment names, account ID, version label, ...) are masked by
+ * core.setSecret instead; this covers the ones only the service knows (resources it created).
+ */
+export function sanitizeResourceIdentifiers(message: string): string {
+  return message
+    // EC2 instance IDs: i-0abc123def
+    .replace(/\bi-[0-9a-f]{8,17}\b/g, '***')
+    // Security group IDs: sg-0abc123def
+    .replace(/\bsg-[0-9a-f]{8,17}\b/g, '***')
+    // ENI IDs: eni-0abc123
+    .replace(/\beni-[0-9a-f]{8,17}\b/g, '***')
+    // Subnet IDs: subnet-0abc123
+    .replace(/\bsubnet-[0-9a-f]{8,17}\b/g, '***')
+    // VPC IDs: vpc-0abc123
+    .replace(/\bvpc-[0-9a-f]{8,17}\b/g, '***')
+    // Launch template IDs: lt-0abc123def
+    .replace(/\blt-[0-9a-f]{8,17}\b/g, '***')
+    // EBS volume IDs: vol-0abc123def
+    .replace(/\bvol-[0-9a-f]{8,17}\b/g, '***')
+    // Elastic IP allocation IDs: eipalloc-0abc123
+    .replace(/\beipalloc-[0-9a-f]{8,17}\b/g, '***')
+    // NAT gateway IDs: nat-0abc123
+    .replace(/\bnat-[0-9a-f]{8,17}\b/g, '***')
+    // EB-generated resource names: awseb-e-xxx-AWSEBLoa-xxx (must precede env ID pattern)
+    .replace(/\bawseb-[a-zA-Z0-9_-]+\b/g, '***')
+    // EB environment IDs: e-abcdefghij
+    .replace(/\be-[a-z0-9]{10,}\b/g, '***')
+    // ARNs: arn:aws:service:region:account:resource (also aws-cn / aws-us-gov partitions)
+    .replace(/\barn:aws[a-z-]*:[a-zA-Z0-9_/:.+*@-]+\b/g, '***')
+    // Container image references: 123456789012.dkr.ecr.us-east-1.amazonaws.com/app:tag or @sha256:...
+    // (stops before whitespace, quotes, and closing punctuation so surrounding prose survives)
+    .replace(/\b\d{12}\.dkr\.ecr(-fips)?\.[a-z0-9-]+\.amazonaws\.com(\.cn)?\/(?:[^\s"'()[\]{},;.]|\.(?=[^\s"'()[\]{},;.]))+/g, '***')
+    // IPv4 addresses (octets 0-255, so dotted version strings like 1.2.3.400 are left alone)
+    .replace(/\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g, '***');
+}
+
+/**
+ * Format an AWS error for a non-fatal log line, stripping resource identifiers unless verbose.
+ */
+export function describeErrorMessage(error: unknown, verboseLogging: boolean): string {
+  const message = (error as Error)?.message ?? String(error);
+  return verboseLogging ? message : sanitizeResourceIdentifiers(message);
+}
+
+/**
  * Fetch recent environment events for debugging and check for fatal/error events.
+ * Event lines are only printed when verboseLogging is true: they contain names of resources the
+ * service created (security groups, load balancers, instances, EKS node groups) that core.setSecret
+ * cannot know about in advance. ERROR/FATAL detection runs regardless.
  */
 async function describeRecentEvents(
   clients: AWSClients,
   applicationName: string,
   environmentName: string,
+  verboseLogging: boolean,
   lastSeenEventDate?: Date,
   deploymentStartTime?: Date
 ): Promise<{ hasError: boolean; errorMessage?: string; lastEventDate?: Date }> {
@@ -28,7 +79,7 @@ async function describeRecentEvents(
     }
 
     // Only show header on first call
-    if (!lastSeenEventDate) {
+    if (verboseLogging && !lastSeenEventDate) {
       core.info('📋 Recent events:');
     }
 
@@ -44,17 +95,22 @@ async function describeRecentEvents(
         mostRecentDate = eventDate;
       }
 
-      const timestamp = eventDate?.toISOString() || 'Unknown time';
       const severity = event.severity || 'INFO';
       const message = event.message || 'No message';
 
       if (severity === 'ERROR' || severity === 'FATAL') {
-        core.error(`  [${timestamp}] ${severity}: ${message}`);
         fatalOrErrorEvents.push({ message });
-      } else if (severity === 'WARN') {
-        core.warning(`  [${timestamp}] ${severity}: ${message}`);
-      } else {
-        core.info(`  [${timestamp}] ${severity}: ${message}`);
+      }
+
+      if (verboseLogging) {
+        const timestamp = eventDate?.toISOString() || 'Unknown time';
+        if (severity === 'ERROR' || severity === 'FATAL') {
+          core.error(`  [${timestamp}] ${severity}: ${message}`);
+        } else if (severity === 'WARN') {
+          core.warning(`  [${timestamp}] ${severity}: ${message}`);
+        } else {
+          core.info(`  [${timestamp}] ${severity}: ${message}`);
+        }
       }
     });
 
@@ -80,6 +136,7 @@ export async function waitForDeploymentCompletion(
   applicationName: string,
   environmentName: string,
   timeout: number,
+  verboseLogging: boolean,
   deploymentActionType?: 'create' | 'update',
   deploymentStartTime?: Date,
   expectedVersionLabel?: string
@@ -108,7 +165,7 @@ export async function waitForDeploymentCompletion(
       // Always check for fatal/error events first — a launch failure can flip status to
       // Ready in the same poll cycle it errors (EB surfaces the failure via events/health,
       // not a distinct terminal status), so the Ready branch must not short-circuit past it.
-      const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+      const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
       lastSeenEventDate = eventCheck.lastEventDate;
 
       if (eventCheck.hasError) {
@@ -127,6 +184,10 @@ export async function waitForDeploymentCompletion(
       if (status === 'Ready' && versionMismatch) {
         readyOnUnexpectedVersionSince ??= Date.now();
         if (Date.now() - readyOnUnexpectedVersionSince >= rollbackConfirmationMs) {
+          // The label the environment rolled back to is only known now; mask it like the requested one.
+          if (!verboseLogging && env.versionLabel) {
+            core.setSecret(env.versionLabel);
+          }
           throw new Error(
             `Environment deployment failed - environment is running version ${env.versionLabel ?? 'unknown'} ` +
             `instead of the requested ${expectedVersionLabel}, the update was most likely rolled back`
@@ -147,7 +208,7 @@ export async function waitForDeploymentCompletion(
   }
 
   // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+  await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
   throw new Error(`Deployment timed out after ${timeout}s`);
 }
 
@@ -159,6 +220,7 @@ export async function waitForHealthRecovery(
   applicationName: string,
   environmentName: string,
   timeout: number,
+  verboseLogging: boolean,
   deploymentStartTime?: Date,
   lastEventDateFromDeployment?: Date
 ): Promise<void> {
@@ -183,7 +245,7 @@ export async function waitForHealthRecovery(
       }
 
       if (health === 'Grey' || health === undefined || health === 'Red') {
-        const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+        const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
 
         if (eventCheck.lastEventDate) {
           lastSeenEventDate = eventCheck.lastEventDate;
@@ -208,7 +270,7 @@ export async function waitForHealthRecovery(
   }
 
   // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+  await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
   throw new Error(`Environment health recovery timed out after ${timeout}s`);
 }
 
@@ -224,7 +286,8 @@ export async function waitForEnvironmentReady(
   clients: AWSClients,
   applicationName: string,
   environmentName: string,
-  timeout: number
+  timeout: number,
+  verboseLogging = true
 ): Promise<void> {
   const startTime = Date.now();
   const maxWait = timeout * 1000;
@@ -248,7 +311,7 @@ export async function waitForEnvironmentReady(
       // The poll loop is the retry for transient describe failures (throttling, 5xx); permanent
       // ones (lost permissions, expired credentials) and the terminal-state error above propagate.
       if (env !== undefined || isNonRetryableError(error)) throw error;
-      core.warning(`Could not read environment status (will retry): ${(error as Error).message}`);
+      core.warning(`Could not read environment status (will retry): ${describeErrorMessage(error, verboseLogging)}`);
       status = undefined;
     }
     const remainingMs = maxWait - (Date.now() - startTime);

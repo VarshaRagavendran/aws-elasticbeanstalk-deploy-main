@@ -84,6 +84,10 @@ inputs:
   build-configuration:
     description: 'JSON object for Beanstalk Cluster auto-containerization (build from source): the Build settings, e.g. {"Type":"docker","CodeBuildServiceRole":"arn:..."}. When set, the action creates a Beanstalk Cluster environment and triggers a CodeBuild image build. Mutually exclusive with image-uri.'
     required: false
+  verbose-logging:
+    description: 'When true, infrastructure identifiers (account ID, bucket names, application/environment names, version labels, environment URL/ID, image URIs) are shown in logs and Elastic Beanstalk event details are printed. When false (default), they are masked and event details are suppressed; error messages are also stripped of AWS resource IDs. Action outputs are always set regardless of this value and remain readable by later steps in the same job; note that GitHub does not forward masked values as job-level outputs to other jobs, so set this to true if you promote environment-url, environment-id, or version-label to a job output.'
+    required: false
+    default: 'false'
 
 outputs:
   environment-url:

@@ -4,6 +4,7 @@ jest.mock('@actions/core', () => ({
   getBooleanInput: jest.fn(),
   setFailed: jest.fn(),
   setOutput: jest.fn(),
+  setSecret: jest.fn(),
   info: jest.fn(),
   warning: jest.fn(),
   error: jest.fn(),
@@ -110,7 +111,7 @@ import {
   updateEnvironment,
   createEnvironment,
 } from '../aws-operations';
-import { waitForDeploymentCompletion, waitForHealthRecovery, waitForEnvironmentReady, getEnvironmentInfo } from '../monitoring';
+import { waitForDeploymentCompletion, waitForHealthRecovery, waitForEnvironmentReady, getEnvironmentInfo, sanitizeResourceIdentifiers } from '../monitoring';
 import { AWSClients } from '../aws-clients';
 import { CreateApplicationVersionCommand } from '@aws-sdk/client-elastic-beanstalk';
 
@@ -472,7 +473,7 @@ describe('Main Functions', () => {
       mockSend
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green' }] })
         .mockResolvedValueOnce({ Events: [] });
-      await waitForDeploymentCompletion(mockClients, 'app', 'env', 60, 'update', new Date(0));
+      await waitForDeploymentCompletion(mockClients, 'app', 'env', 60, true, 'update', new Date(0));
       const { DescribeEventsCommand } = require('@aws-sdk/client-elastic-beanstalk');
       expect(DescribeEventsCommand).toHaveBeenCalledWith(expect.objectContaining({ ApplicationName: 'app', EnvironmentName: 'env' }));
     });
@@ -481,7 +482,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Status: 'Ready' }],
       });
-      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900);
+      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -492,7 +493,7 @@ describe('Main Functions', () => {
       try {
         mockSend.mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).rejects.toThrow(
           'Environment deployment failed - environment is running version v1.0.0 instead of the requested v2.0.0'
         );
@@ -511,7 +512,7 @@ describe('Main Functions', () => {
           .mockResolvedValueOnce({ Environments: [{ Status: 'Updating', VersionLabel: 'v2.0.0' }] })
           .mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).rejects.toThrow(
           'Environment deployment failed - environment is running version v1.0.0 instead of the requested v2.0.0'
         );
@@ -528,7 +529,7 @@ describe('Main Functions', () => {
       try {
         mockSend.mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 1, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 1, true, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).rejects.toThrow('Deployment timed out after 1s');
 
         await jest.advanceTimersByTimeAsync(30000);
@@ -546,7 +547,7 @@ describe('Main Functions', () => {
           .mockResolvedValueOnce({}) // events
           .mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v2.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).resolves.toBeUndefined();
 
         await jest.advanceTimersByTimeAsync(20000);
@@ -564,7 +565,7 @@ describe('Main Functions', () => {
         });
 
       await expect(
-        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0')
+        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0')
       ).rejects.toThrow('Environment deployment failed - fatal or error event detected: Failed to deploy application.');
     });
 
@@ -572,7 +573,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v2.0.0' }] });
 
       await expect(
-        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0')
+        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0')
       ).resolves.toBeUndefined();
     });
 
@@ -595,7 +596,7 @@ describe('Main Functions', () => {
         return Promise.resolve({ Environments: [{ Status: 'Ready' }] });
       });
 
-      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900))
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true))
         .rejects.toThrow('Environment deployment failed - fatal or error event detected: Failed to launch environment');
     });
   });
@@ -638,7 +639,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Green', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, true);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -646,7 +647,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Yellow', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, true);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -664,7 +665,7 @@ describe('Main Functions', () => {
             }
           ]
         });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
         .rejects.toThrow('Environment health recovery failed - fatal or error event detected: Deployment failed');
     });
 
@@ -675,7 +676,7 @@ describe('Main Functions', () => {
         }
         return Promise.resolve({ Environments: [{ Health: 'Red', Status: 'Ready' }] });
       });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
         .rejects.toThrow('Environment health recovery failed - health is Red');
     });
 
@@ -689,8 +690,107 @@ describe('Main Functions', () => {
           Environments: [{ Health: 'Red', Status: 'Updating' }],
         });
       });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
         .rejects.toThrow('Environment health recovery timed out after 1s');
+    });
+  });
+
+  describe('sanitizeResourceIdentifiers', () => {
+    it('should mask EC2 instance IDs', () => {
+      expect(sanitizeResourceIdentifiers('Failed on i-0a1b2c3d4e5f67890'))
+        .toBe('Failed on ***');
+    });
+
+    it('should mask security group IDs', () => {
+      expect(sanitizeResourceIdentifiers('Created security group named: sg-0a1b2c3d4e5f67890'))
+        .toBe('Created security group named: ***');
+    });
+
+    it('should mask ARNs', () => {
+      expect(sanitizeResourceIdentifiers('Policy: arn:aws:autoscaling:us-west-2:000000000000:scalingPolicy:example'))
+        .toBe('Policy: ***');
+      expect(sanitizeResourceIdentifiers('Role: arn:aws-us-gov:iam::000000000000:role/my-role'))
+        .toBe('Role: ***');
+    });
+
+    it('should mask EB-generated resource names', () => {
+      expect(sanitizeResourceIdentifiers('Created: awseb-e-abcdefghij-stack-AWSEBAutoScalingGroup-EXAMPLE123'))
+        .toBe('Created: ***');
+    });
+
+    it('should mask EB environment IDs', () => {
+      expect(sanitizeResourceIdentifiers('Environment e-abcdefghij not found'))
+        .toBe('Environment *** not found');
+    });
+
+    it('should mask ECR image references', () => {
+      expect(sanitizeResourceIdentifiers('Image 123456789012.dkr.ecr.us-east-1.amazonaws.com/my-app@sha256:abc123 not found'))
+        .toBe('Image *** not found');
+      expect(sanitizeResourceIdentifiers('Pulling 123456789012.dkr.ecr.us-east-1.amazonaws.com/my-app:v1'))
+        .toBe('Pulling ***');
+    });
+
+    it('should mask IP addresses', () => {
+      expect(sanitizeResourceIdentifiers('Connected to 10.0.0.1'))
+        .toBe('Connected to ***');
+    });
+
+    it('should mask multiple identifiers in one message', () => {
+      expect(sanitizeResourceIdentifiers('Instance i-0a1b2c3d4e5f67890 in sg-0f9e8d7c6b5a43210 failed'))
+        .toBe('Instance *** in *** failed');
+    });
+
+    it('should leave non-sensitive text unchanged', () => {
+      expect(sanitizeResourceIdentifiers('Deployment completed successfully'))
+        .toBe('Deployment completed successfully');
+      expect(sanitizeResourceIdentifiers('Environment health recovery failed - health is Red'))
+        .toBe('Environment health recovery failed - health is Red');
+      // Dotted version strings are not IPv4 addresses
+      expect(sanitizeResourceIdentifiers('Deployed version 1.2.3.400 to platform 4.9.2'))
+        .toBe('Deployed version 1.2.3.400 to platform 4.9.2');
+    });
+
+    it('should not consume punctuation around ECR image references', () => {
+      expect(sanitizeResourceIdentifiers('Image (123456789012.dkr.ecr.us-east-1.amazonaws.com/app:v1), retrying'))
+        .toBe('Image (***), retrying');
+      expect(sanitizeResourceIdentifiers('Pulled 123456789012.dkr.ecr.us-east-1.amazonaws.com/app@sha256:abc.'))
+        .toBe('Pulled ***.');
+    });
+  });
+
+  describe('event logging and verbose-logging', () => {
+    const events = {
+      Events: [
+        { EventDate: new Date('2024-01-01T00:00:10Z'), Severity: 'INFO', Message: 'Created security group named: sg-0a1b2c3d4e5f67890' },
+        { EventDate: new Date('2024-01-01T00:00:20Z'), Severity: 'ERROR', Message: 'Launching instance i-0a1b2c3d4e5f67890 failed' },
+      ],
+    };
+
+    it('should print event details when verbose logging is on', async () => {
+      mockSend
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Updating' }] }) // DescribeEnvironments
+        .mockResolvedValueOnce(events); // DescribeEvents
+
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', new Date(0)))
+        .rejects.toThrow('fatal or error event detected: Launching instance i-0a1b2c3d4e5f67890 failed');
+
+      expect(mockedCore.info).toHaveBeenCalledWith('📋 Recent events:');
+      expect(mockedCore.info).toHaveBeenCalledWith(expect.stringContaining('sg-0a1b2c3d4e5f67890'));
+      expect(mockedCore.error).toHaveBeenCalledWith(expect.stringContaining('i-0a1b2c3d4e5f67890'));
+    });
+
+    it('should suppress event details but still detect errors when verbose logging is off', async () => {
+      mockSend
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Updating' }] }) // DescribeEnvironments
+        .mockResolvedValueOnce(events); // DescribeEvents
+
+      // The raw event message still surfaces in the thrown error; main() sanitizes it before logging.
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', new Date(0)))
+        .rejects.toThrow('fatal or error event detected: Launching instance i-0a1b2c3d4e5f67890 failed');
+
+      expect(mockedCore.info).not.toHaveBeenCalledWith('📋 Recent events:');
+      expect(mockedCore.info).not.toHaveBeenCalledWith(expect.stringContaining('sg-0a1b2c3d4e5f67890'));
+      expect(mockedCore.error).not.toHaveBeenCalled();
     });
   });
 
@@ -805,6 +905,115 @@ describe('Main Functions', () => {
 
       expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'update');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    // STS -> DescribeEnvs -> HeadBucket -> PutObject -> CreateAppVersion -> DescribeEnvs (fresh) -> UpdateEnv -> GetEnvInfo
+    function mockStandardUpdateFlow() {
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockResolvedValueOnce({}) // PutObject
+        .mockResolvedValueOnce({}) // CreateAppVersion
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({}) // UpdateEnvironment
+        .mockResolvedValueOnce({ Environments: [{ CNAME: 'test.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] });
+    }
+
+    it('should mask sensitive identifiers when verbose-logging is false', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return false;
+        return false;
+      });
+      mockStandardUpdateFlow();
+
+      await run();
+
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('123456789012');
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('test-app');
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('test-env');
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('v1.0.0');
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('elasticbeanstalk-us-east-1-123456789012');
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('test.com');
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('e-123');
+      // Identifiers are registered with the masker before the first log line that contains them
+      const firstAppMask = mockedCore.setSecret.mock.invocationCallOrder[mockedCore.setSecret.mock.calls.findIndex(c => c[0] === 'test-app')];
+      const firstAppLog = mockedCore.info.mock.invocationCallOrder[mockedCore.info.mock.calls.findIndex(c => String(c[0]).includes('test-app'))];
+      expect(firstAppMask).toBeLessThan(firstAppLog);
+      // Outputs are still set (masking is handled by the runner, not by withholding outputs)
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-url', 'test.com');
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-id', 'e-123');
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    it('should not mask identifiers when verbose-logging is true', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return true;
+        return false;
+      });
+      mockStandardUpdateFlow();
+
+      await run();
+
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(mockedCore.setSecret).not.toHaveBeenCalled();
+    });
+
+    it('should sanitize resource identifiers in the failure message when verbose-logging is false', async () => {
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockRejectedValue(Object.assign(new Error('Environment e-abcdefghij is bound to arn:aws:iam::123456789012:role/r and instance i-0a1b2c3d4e5f67890'), { name: 'AccessDeniedException' }));
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Environment *** is bound to *** and instance ***'));
+      expect(mockedCore.setFailed).not.toHaveBeenCalledWith(expect.stringContaining('i-0a1b2c3d4e5f67890'));
+      expect(mockedCore.error).toHaveBeenCalledWith(expect.stringContaining('Environment *** is bound to *** and instance ***'));
+    });
+
+    it('should log an ERROR event only in sanitized form when verbose-logging is false (end to end)', async () => {
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockResolvedValueOnce({}) // PutObject
+        .mockResolvedValueOnce({}) // CreateAppVersion
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({}) // UpdateEnvironment
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Updating', Health: 'Grey' }] }) // DescribeEnvironments (deployment poll)
+        .mockResolvedValueOnce({ Events: [{ EventDate: new Date(Date.now() + 60000), Severity: 'ERROR', Message: 'Creating security group failed: sg-0a1b2c3d4e5f67890 on i-0a1b2c3d4e5f67890' }] });
+
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'wait-for-deployment') return true;
+        return false;
+      });
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Creating security group failed: *** on ***'));
+      const allLogged = [...mockedCore.info.mock.calls, ...mockedCore.warning.mock.calls, ...mockedCore.error.mock.calls, ...mockedCore.setFailed.mock.calls]
+        .map(c => String(c[0])).join('\n');
+      expect(allLogged).not.toContain('sg-0a1b2c3d4e5f67890');
+      expect(allLogged).not.toContain('i-0a1b2c3d4e5f67890');
+    });
+
+    it('should keep resource identifiers in the failure message when verbose-logging is true', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return true;
+        return false;
+      });
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockRejectedValue(Object.assign(new Error('Launching instance i-0a1b2c3d4e5f67890 failed'), { name: 'AccessDeniedException' }));
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('i-0a1b2c3d4e5f67890'));
     });
 
     const clusterEnv = { Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'Cluster', Type: 'EKS' } }] };

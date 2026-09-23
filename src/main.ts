@@ -21,10 +21,24 @@ import {
   validateOptionSettingsForCreate,
   validateOptionSettingsForCreateClusterMode,
 } from './aws-operations';
-import { waitForDeploymentCompletion, waitForHealthRecovery, waitForEnvironmentReady, getEnvironmentInfo } from './monitoring';
+import { waitForDeploymentCompletion, waitForHealthRecovery, waitForEnvironmentReady, getEnvironmentInfo, sanitizeResourceIdentifiers, describeErrorMessage } from './monitoring';
+
+/**
+ * Register a value with the runner's log masker unless verbose logging is on. No-op for empty
+ * values: core.setSecret('') would otherwise mask nothing useful (and an empty secret is rejected
+ * by the runner on some versions).
+ */
+function maskUnlessVerbose(verboseLogging: boolean, value: string | undefined): void {
+  if (!verboseLogging && value) {
+    core.setSecret(value);
+  }
+}
 
 export async function run(): Promise<void> {
   const startTime = Date.now();
+  // Hoisted so the catch block can sanitize error messages.
+  // Defaults to false (quiet) if an error is thrown before inputs are parsed.
+  let verboseLogging = false;
 
   try {
     core.info('🚀 Starting Elastic Beanstalk deployment...');
@@ -42,6 +56,16 @@ export async function run(): Promise<void> {
       useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns,
       symlinks, optionSettings, imageUri, buildConfiguration
     } = inputs as Inputs;
+    verboseLogging = (inputs as Inputs).verboseLogging;
+
+    // Mask the identifiers we know up front before anything logs them. Outputs are still set
+    // normally below; the runner masks them in log output only.
+    maskUnlessVerbose(verboseLogging, applicationName);
+    maskUnlessVerbose(verboseLogging, environmentName);
+    maskUnlessVerbose(verboseLogging, applicationVersionLabel);
+    maskUnlessVerbose(verboseLogging, s3BucketName);
+    maskUnlessVerbose(verboseLogging, cnamePrefix);
+    maskUnlessVerbose(verboseLogging, imageUri);
 
     // image-uri / build-configuration select Beanstalk Cluster mode (CreateApplicationVersion with
     // ImageConfiguration); neither set means the classic Beanstalk Standard source-bundle flow.
@@ -59,6 +83,10 @@ export async function run(): Promise<void> {
 
     core.startGroup('🔐 Getting AWS account information');
     const accountId = await getAwsAccountId(clients, maxRetries, retryDelay);
+    maskUnlessVerbose(verboseLogging, accountId);
+    // The default bucket name embeds the account ID and can appear in errors thrown inside
+    // uploadToS3, so register it before that call rather than from its result.
+    maskUnlessVerbose(verboseLogging, s3BucketName || `elasticbeanstalk-${awsRegion}-${accountId}`);
     core.info('✅ AWS account verified');
     core.endGroup();
 
@@ -133,15 +161,15 @@ export async function run(): Promise<void> {
         : { exists: false };
       if (existing.exists) {
         core.startGroup('♻️  Reusing existing version');
-        await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES);
-        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay,
+        await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES, verboseLogging);
+        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, verboseLogging,
           'The existing version under this label has no image (for example a source bundle from a run that did not set image-uri), so it cannot be deployed to a Beanstalk Cluster environment.');
         core.info(`Version ${applicationVersionLabel} already exists, skipping version creation`);
         core.endGroup();
       } else {
         core.startGroup('📝 Creating application version (Beanstalk Cluster BYOI)');
         await createApplicationVersion(clients, applicationName, applicationVersionLabel, undefined, undefined, maxRetries, retryDelay, createApplicationIfNotExists, imageUri);
-        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay,
+        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, verboseLogging,
           'The service did not record the image-uri on the version, so it cannot be deployed to a Beanstalk Cluster environment.');
         core.endGroup();
       }
@@ -178,8 +206,8 @@ export async function run(): Promise<void> {
 
       if (existing.exists) {
         core.startGroup('♻️  Reusing existing version');
-        await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? buildTimeoutMinutes);
-        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay,
+        await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? buildTimeoutMinutes, verboseLogging);
+        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, verboseLogging,
           'The existing version under this label reports PROCESSED but has no built image, so it cannot be deployed to a Beanstalk Cluster environment.');
         core.info(`Version ${applicationVersionLabel} already exists, skipping packaging, S3 upload, and image build`);
         core.endGroup();
@@ -207,6 +235,7 @@ export async function run(): Promise<void> {
           createS3BucketIfNotExists,
           s3BucketName
         );
+        maskUnlessVerbose(verboseLogging, uploadResult.bucket);
         core.endGroup();
 
         core.startGroup('📝 Creating application version (auto-containerization)');
@@ -214,11 +243,11 @@ export async function run(): Promise<void> {
         core.endGroup();
 
         core.startGroup(`🔨 Waiting for image build to complete (up to ${buildTimeoutMinutes} minutes)`);
-        await waitForImageBuild(clients, applicationName, applicationVersionLabel, buildTimeoutMinutes);
+        await waitForImageBuild(clients, applicationName, applicationVersionLabel, buildTimeoutMinutes, verboseLogging);
         // PROCESSED alone is not proof an image exists: when the service does not accept the build
         // settings (for example a Type in the wrong case or a DockerfileLocation that is not in the
         // bundle) it currently marks the version PROCESSED within a second without building anything.
-        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay,
+        await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, verboseLogging,
           'The version reports PROCESSED but no image was built. Check the build-configuration ' +
           '(Type must be "docker" or "buildpack"; DockerfileLocation must name a file in the source bundle).');
         core.endGroup();
@@ -255,6 +284,7 @@ export async function run(): Promise<void> {
         );
         bucket = uploadResult.bucket;
         key = uploadResult.key;
+        maskUnlessVerbose(verboseLogging, bucket);
         core.endGroup();
 
         core.startGroup(`📝 Creating application version ${applicationVersionLabel}`);
@@ -275,6 +305,7 @@ export async function run(): Promise<void> {
         const s3Location = await getVersionS3Location(clients, applicationName, applicationVersionLabel);
         bucket = s3Location.bucket;
         key = s3Location.key;
+        maskUnlessVerbose(verboseLogging, bucket);
         core.endGroup();
       }
     }
@@ -285,7 +316,7 @@ export async function run(): Promise<void> {
     let deploymentStartTime = new Date();
 
     if (envCheck.exists) {
-      await waitForEnvironmentReady(clients, applicationName, environmentName, deploymentTimeout);
+      await waitForEnvironmentReady(clients, applicationName, environmentName, deploymentTimeout, verboseLogging);
       deploymentStartTime = new Date();
 
       core.startGroup('🔄 Updating environment');
@@ -324,16 +355,19 @@ export async function run(): Promise<void> {
     let lastSeenEventDate: Date | undefined;
     if (waitForDeployment) {
       core.startGroup('⏳ Waiting for deployment');
-      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime, applicationVersionLabel);
+      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, verboseLogging, deploymentActionType, deploymentStartTime, applicationVersionLabel);
       core.endGroup();
     }
     if (waitForEnvironmentRecovery) {
       core.startGroup('🏥 Waiting for environment health');
-      await waitForHealthRecovery(clients, applicationName, environmentName, deploymentTimeout, deploymentStartTime, lastSeenEventDate);
+      await waitForHealthRecovery(clients, applicationName, environmentName, deploymentTimeout, verboseLogging, deploymentStartTime, lastSeenEventDate);
       core.endGroup();
     }
 
     const envInfo = await getEnvironmentInfo(clients, applicationName, environmentName);
+
+    maskUnlessVerbose(verboseLogging, envInfo.url);
+    maskUnlessVerbose(verboseLogging, envInfo.id);
 
     core.setOutput('environment-url', envInfo.url);
     core.setOutput('environment-id', envInfo.id);
@@ -357,8 +391,11 @@ export async function run(): Promise<void> {
 
   } catch (error) {
     const totalTime = Math.round((Date.now() - startTime) / 1000);
-    core.error(`❌ Deployment failed after ${totalTime}s: ${(error as Error).message}`);
-    core.setFailed(`Deployment failed: ${(error as Error).message}`);
+    const errorMessage = verboseLogging
+      ? (error as Error).message
+      : sanitizeResourceIdentifiers((error as Error).message);
+    core.error(`❌ Deployment failed after ${totalTime}s: ${errorMessage}`);
+    core.setFailed(`Deployment failed: ${errorMessage}`);
   }
 }
 
@@ -376,7 +413,8 @@ async function waitForImageBuild(
   clients: AWSClients,
   applicationName: string,
   versionLabel: string,
-  timeoutMinutes: number
+  timeoutMinutes: number,
+  verboseLogging: boolean
 ): Promise<void> {
   const deadlineMs = (timeoutMinutes * 60 + 120) * 1000;
   const start = Date.now();
@@ -389,7 +427,7 @@ async function waitForImageBuild(
       // credentials, lost permissions) would otherwise be retried until the build deadline and
       // then misreported as a build timeout.
       if (isNonRetryableError(error)) throw error;
-      core.warning(`Could not read build status (will retry): ${(error as Error).message}`);
+      core.warning(`Could not read build status (will retry): ${describeErrorMessage(error, verboseLogging)}`);
     }
     const normalized = status?.toUpperCase();
     if (normalized === 'PROCESSED' || normalized === 'FAILED') {
@@ -407,7 +445,7 @@ async function waitForImageBuild(
         status = await getApplicationVersionStatus(clients, applicationName, versionLabel);
       } catch (error) {
         if (isNonRetryableError(error)) throw error;
-        core.warning(`Could not read build status: ${(error as Error).message}`);
+        core.warning(`Could not read build status: ${describeErrorMessage(error, verboseLogging)}`);
       }
       break;
     }
@@ -435,7 +473,8 @@ async function ensureReusableClusterVersion(
   applicationName: string,
   versionLabel: string,
   status: string | undefined,
-  buildTimeoutMinutes: number
+  buildTimeoutMinutes: number,
+  verboseLogging: boolean
 ): Promise<void> {
   const normalized = status?.toUpperCase();
   if (normalized === 'FAILED') {
@@ -446,7 +485,7 @@ async function ensureReusableClusterVersion(
   }
   if (normalized && normalized !== 'PROCESSED' && normalized !== 'UNPROCESSED') {
     core.info(`Version ${versionLabel} already exists and its image build is still ${status}; waiting for it to finish`);
-    await waitForImageBuild(clients, applicationName, versionLabel, buildTimeoutMinutes);
+    await waitForImageBuild(clients, applicationName, versionLabel, buildTimeoutMinutes, verboseLogging);
   }
 }
 
@@ -462,9 +501,13 @@ async function assertVersionHasImage(
   versionLabel: string,
   maxRetries: number,
   retryDelay: number,
+  verboseLogging: boolean,
   reason: string
 ): Promise<void> {
   const imageUri = await getApplicationVersionImageUri(clients, applicationName, versionLabel, maxRetries, retryDelay);
+  // The resolved URI (digest-pinned for built images) is only known now, so register it with the
+  // masker before logging it.
+  maskUnlessVerbose(verboseLogging, imageUri);
   if (!imageUri) {
     throw new Error(
       `Application version ${versionLabel} has no container image. ${reason} ` +
