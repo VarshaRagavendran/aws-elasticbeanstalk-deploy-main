@@ -473,7 +473,7 @@ describe('Main Functions', () => {
       mockSend
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green' }] })
         .mockResolvedValueOnce({ Events: [] });
-      await waitForDeploymentCompletion(mockClients, 'app', 'env', 60, true, 'update', new Date(0));
+      await waitForDeploymentCompletion(mockClients, 'app', 'env', 60, false, 'update', new Date(0));
       const { DescribeEventsCommand } = require('@aws-sdk/client-elastic-beanstalk');
       expect(DescribeEventsCommand).toHaveBeenCalledWith(expect.objectContaining({ ApplicationName: 'app', EnvironmentName: 'env' }));
     });
@@ -482,7 +482,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Status: 'Ready' }],
       });
-      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true);
+      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -493,7 +493,7 @@ describe('Main Functions', () => {
       try {
         mockSend.mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).rejects.toThrow(
           'Environment deployment failed - environment is running version v1.0.0 instead of the requested v2.0.0'
         );
@@ -512,7 +512,7 @@ describe('Main Functions', () => {
           .mockResolvedValueOnce({ Environments: [{ Status: 'Updating', VersionLabel: 'v2.0.0' }] })
           .mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).rejects.toThrow(
           'Environment deployment failed - environment is running version v1.0.0 instead of the requested v2.0.0'
         );
@@ -529,7 +529,7 @@ describe('Main Functions', () => {
       try {
         mockSend.mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 1, true, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 1, false, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).rejects.toThrow('Deployment timed out after 1s');
 
         await jest.advanceTimersByTimeAsync(30000);
@@ -547,7 +547,7 @@ describe('Main Functions', () => {
           .mockResolvedValueOnce({}) // events
           .mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v2.0.0' }] });
 
-        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0');
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', deploymentStartTime, 'v2.0.0');
         const assertion = expect(deployment).resolves.toBeUndefined();
 
         await jest.advanceTimersByTimeAsync(20000);
@@ -565,7 +565,7 @@ describe('Main Functions', () => {
         });
 
       await expect(
-        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0')
+        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', deploymentStartTime, 'v2.0.0')
       ).rejects.toThrow('Environment deployment failed - fatal or error event detected: Failed to deploy application.');
     });
 
@@ -573,7 +573,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v2.0.0' }] });
 
       await expect(
-        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', deploymentStartTime, 'v2.0.0')
+        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', deploymentStartTime, 'v2.0.0')
       ).resolves.toBeUndefined();
     });
 
@@ -596,7 +596,7 @@ describe('Main Functions', () => {
         return Promise.resolve({ Environments: [{ Status: 'Ready' }] });
       });
 
-      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true))
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false))
         .rejects.toThrow('Environment deployment failed - fatal or error event detected: Failed to launch environment');
     });
   });
@@ -610,7 +610,7 @@ describe('Main Functions', () => {
         .mockResolvedValueOnce({ Events: [] })
         .mockResolvedValueOnce({ Events: [{ EventDate: new Date(60000), Severity: 'ERROR', Message: 'Failed to deploy application.' }] });
 
-      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 1, false, 'update', deploymentStartTime))
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 1, true, 'update', deploymentStartTime))
         .rejects.toThrow('Deployment timed out after 1s - fatal or error event detected: Failed to deploy application.');
     });
   });
@@ -623,7 +623,7 @@ describe('Main Functions', () => {
           .mockRejectedValueOnce(new Error('Rate exceeded')) // transient
           .mockResolvedValueOnce({ Environments: [{ Status: 'Ready' }] });
 
-        const wait = waitForEnvironmentReady(mockClients, 'app', 'env', 900, true);
+        const wait = waitForEnvironmentReady(mockClients, 'app', 'env', 900, false);
         await jest.advanceTimersByTimeAsync(10000);
         await expect(wait).resolves.toBeUndefined();
         expect(mockedCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not read environment status (will retry): Rate exceeded'));
@@ -637,13 +637,13 @@ describe('Main Functions', () => {
       denied.name = 'AccessDeniedException';
       mockSend.mockRejectedValueOnce(denied);
 
-      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900, true)).rejects.toThrow('not authorized');
+      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900, false)).rejects.toThrow('not authorized');
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
 
     it('should return without waiting when the environment is already Ready', async () => {
       mockSend.mockResolvedValueOnce({ Environments: [{ Status: 'Ready' }] });
-      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900, true)).resolves.toBeUndefined();
+      await expect(waitForEnvironmentReady(mockClients, 'app', 'env', 900, false)).resolves.toBeUndefined();
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
   });
@@ -653,7 +653,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Green', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900, true);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, false);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -661,7 +661,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Yellow', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900, true);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, false);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -679,7 +679,7 @@ describe('Main Functions', () => {
             }
           ]
         });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, false))
         .rejects.toThrow('Environment health recovery failed - fatal or error event detected: Deployment failed');
     });
 
@@ -690,7 +690,7 @@ describe('Main Functions', () => {
         }
         return Promise.resolve({ Environments: [{ Health: 'Red', Status: 'Ready' }] });
       });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, false))
         .rejects.toThrow('Environment health recovery failed - health is Red');
     });
 
@@ -704,7 +704,7 @@ describe('Main Functions', () => {
           Environments: [{ Health: 'Red', Status: 'Updating' }],
         });
       });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, false))
         .rejects.toThrow('Environment health recovery timed out after 1s');
     });
   });
@@ -774,7 +774,7 @@ describe('Main Functions', () => {
     });
   });
 
-  describe('event logging and verbose-logging', () => {
+  describe('event logging and mask-resource-identifiers', () => {
     const events = {
       Events: [
         { EventDate: new Date('2024-01-01T00:00:10Z'), Severity: 'INFO', Message: 'Created security group named: sg-0a1b2c3d4e5f67890' },
@@ -782,12 +782,12 @@ describe('Main Functions', () => {
       ],
     };
 
-    it('should print event details when verbose logging is on', async () => {
+    it('should print event details when masking is off', async () => {
       mockSend
         .mockResolvedValueOnce({ Environments: [{ Status: 'Updating' }] }) // DescribeEnvironments
         .mockResolvedValueOnce(events); // DescribeEvents
 
-      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', new Date(0)))
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', new Date(0)))
         .rejects.toThrow('fatal or error event detected: Launching instance i-0a1b2c3d4e5f67890 failed');
 
       expect(mockedCore.info).toHaveBeenCalledWith('📋 Recent events:');
@@ -795,13 +795,13 @@ describe('Main Functions', () => {
       expect(mockedCore.error).toHaveBeenCalledWith(expect.stringContaining('i-0a1b2c3d4e5f67890'));
     });
 
-    it('should suppress event details but still detect errors when verbose logging is off', async () => {
+    it('should suppress event details but still detect errors when masking is on', async () => {
       mockSend
         .mockResolvedValueOnce({ Environments: [{ Status: 'Updating' }] }) // DescribeEnvironments
         .mockResolvedValueOnce(events); // DescribeEvents
 
       // The raw event message still surfaces in the thrown error; main() sanitizes it before logging.
-      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, false, 'update', new Date(0)))
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true, 'update', new Date(0)))
         .rejects.toThrow('fatal or error event detected: Launching instance i-0a1b2c3d4e5f67890 failed');
 
       expect(mockedCore.info).not.toHaveBeenCalledWith('📋 Recent events:');
@@ -936,10 +936,10 @@ describe('Main Functions', () => {
         .mockResolvedValueOnce({ Environments: [{ CNAME: 'test.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] });
     }
 
-    it('should mask sensitive identifiers when verbose-logging is false', async () => {
+    it('should mask sensitive identifiers when mask-resource-identifiers is true', async () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
-        if (name === 'verbose-logging') return false;
+        if (name === 'mask-resource-identifiers') return true;
         return false;
       });
       mockStandardUpdateFlow();
@@ -964,6 +964,36 @@ describe('Main Functions', () => {
       expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
     });
 
+    it('should warn when a masked value is shorter than 8 characters', async () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'prod',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'version-label': 'v1.0.0-long-enough',
+          'deployment-timeout': '900',
+          'max-retries': '3',
+          'retry-delay': '1',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockImplementation((name: string) =>
+        name === 'create-s3-bucket-if-not-exists' || name === 'mask-resource-identifiers');
+      mockStandardUpdateFlow();
+
+      await run();
+
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(mockedCore.setSecret).toHaveBeenCalledWith('prod');
+      expect(mockedCore.warning).toHaveBeenCalledWith(expect.stringContaining('environment-name is only 4 characters long'));
+      // The warning must not leak the value it is about
+      const warnings = mockedCore.warning.mock.calls.map(c => String(c[0])).join('\n');
+      expect(warnings).not.toContain("'prod'");
+      // Long values do not warn
+      expect(warnings).not.toContain('application-name is only');
+    });
+
     it('should not mask the version label when it defaults to the commit SHA', async () => {
       const sha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
       const prevSha = process.env.GITHUB_SHA;
@@ -981,7 +1011,8 @@ describe('Main Functions', () => {
           };
           return inputs[name] || '';
         });
-        mockedCore.getBooleanInput.mockImplementation((name: string) => name === 'create-s3-bucket-if-not-exists');
+        mockedCore.getBooleanInput.mockImplementation((name: string) =>
+          name === 'create-s3-bucket-if-not-exists' || name === 'mask-resource-identifiers');
         mockStandardUpdateFlow();
 
         await run();
@@ -995,10 +1026,10 @@ describe('Main Functions', () => {
       }
     });
 
-    it('should not mask identifiers when verbose-logging is true', async () => {
+    it('should not mask identifiers when mask-resource-identifiers is false (default)', async () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
-        if (name === 'verbose-logging') return true;
+        if (name === 'mask-resource-identifiers') return false;
         return false;
       });
       mockStandardUpdateFlow();
@@ -1009,7 +1040,12 @@ describe('Main Functions', () => {
       expect(mockedCore.setSecret).not.toHaveBeenCalled();
     });
 
-    it('should sanitize resource identifiers in the failure message when verbose-logging is false', async () => {
+    it('should sanitize resource identifiers in the failure message when mask-resource-identifiers is true', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'mask-resource-identifiers') return true;
+        return false;
+      });
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
         .mockRejectedValue(Object.assign(new Error('Environment e-abcdefghij is bound to arn:aws:iam::123456789012:role/r and instance i-0a1b2c3d4e5f67890'), { name: 'AccessDeniedException' }));
@@ -1021,7 +1057,7 @@ describe('Main Functions', () => {
       expect(mockedCore.error).toHaveBeenCalledWith(expect.stringContaining('Environment *** is bound to *** and instance ***'));
     });
 
-    it('should log an ERROR event only in sanitized form when verbose-logging is false (end to end)', async () => {
+    it('should log an ERROR event only in sanitized form when mask-resource-identifiers is true (end to end)', async () => {
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
@@ -1036,6 +1072,7 @@ describe('Main Functions', () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
         if (name === 'wait-for-deployment') return true;
+        if (name === 'mask-resource-identifiers') return true;
         return false;
       });
 
@@ -1048,10 +1085,10 @@ describe('Main Functions', () => {
       expect(allLogged).not.toContain('i-0a1b2c3d4e5f67890');
     });
 
-    it('should keep resource identifiers in the failure message when verbose-logging is true', async () => {
+    it('should keep resource identifiers in the failure message when masking is off', async () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
-        if (name === 'verbose-logging') return true;
+        if (name === 'mask-resource-identifiers') return false;
         return false;
       });
       mockSend

@@ -33,9 +33,6 @@ jobs:
       # Unique naming per run ensures PRs don't collide
       APP_NAME: eb-test-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}
       ENV_NAME: it-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}
-      # Passed to both deploy steps. The workflow adds no masks of its own, so flipping this
-      # to 'false' is what makes identifiers appear as *** in the action's log output.
-      VERBOSE_LOGGING: 'false'
 
     steps:
       - name: Checkout PR branch
@@ -43,9 +40,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      # The action masks identifiers it handles (see verbose-logging), but the role ID can surface
-      # in credential/CLI errors from steps that run before the action does, so mask it up front.
-      # The account ID is masked by configure-aws-credentials (mask-aws-account-id).
       - name: Mask role ID
         shell: bash
         env:
@@ -93,6 +87,9 @@ jobs:
           echo "name=$PLATFORM_ARN" >> "$GITHUB_OUTPUT"
           set -x
 
+      # Both deploy steps run with mask-resource-identifiers on: this workflow runs in a public
+      # repository, so identifiers from the integration-test account must not appear in the log.
+      # The unmasked (default) path is covered by unit tests.
       - name: Deploy - Create Environment
         id: deploy-create
         timeout-minutes: 20
@@ -106,7 +103,7 @@ jobs:
           platform-arn: ${{ steps.platform.outputs.name }}
           create-environment-if-not-exists: 'true'
           create-application-if-not-exists: 'true'
-          verbose-logging: ${{ env.VERBOSE_LOGGING }}
+          mask-resource-identifiers: 'true'
           option-settings: |
             [
               {"Namespace": "aws:autoscaling:launchconfiguration", "OptionName": "IamInstanceProfile", "Value": "aws-elasticbeanstalk-ec2-role"},
@@ -140,7 +137,7 @@ jobs:
           environment-name: ${{ env.ENV_NAME }}
           version-label: update-${{ github.run_id }}
           deployment-package-path: test-app.zip
-          verbose-logging: ${{ env.VERBOSE_LOGGING }}
+          mask-resource-identifiers: 'true'
 
       - name: Verify Update Outputs
         shell: bash
